@@ -74,8 +74,6 @@ def detect_sqli(input_string):
     A simple regex-based SQLi detector.
     This is for educational purposes and is NOT a complete solution.
     """
-    # Patterns for common SQLi keywords and characters
-    # This list is not exhaustive and can be bypassed, but demonstrates the concept.
     patterns = [
         r"(['\"])(\s*or\s*|\s*and\s*)\s*(\1\w+\1\s*=\s*\1\w+\1)", # ' or '1'='1
         r"(\s*or\s+|\s*and\s+)\s*\d+\s*=\s*\d+", # or 1=1
@@ -99,18 +97,19 @@ st.title("SQL Injection: Attack, Detection, and Prevention")
 st.markdown("An educational app to demonstrate SQL injection vulnerabilities.")
 
 # Use tabs to organize the application
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Database Viewer", 
-    "1. The Vulnerable Attack", 
-    "2. The Secure Fix (Prevention)", 
-    "3. Attack Detection Scanner",
+tab1, tab_simple_attack, tab2, tab3, tab4, tab5 = st.tabs([
+    "1. Database Viewer",
+    "2. The Simplest Attack (1 Field)", # <-- NEW SIMPLIFIED TAB
+    "3. Vulnerable Login Attack (2 Fields)",
+    "4. The Secure Fix (Prevention)", 
+    "5. Attack Detection Scanner",
     "About This Project"
 ])
 
 # --- Tab 1: Database Viewer ---
 with tab1:
     st.header("Mock User Database")
-    st.write("This is the data stored in our `users` table.")
+    st.write("This is the data stored in our `users` table. The attacker wants to see all of this.")
     
     try:
         conn = get_db_conn()
@@ -121,10 +120,69 @@ with tab1:
     except Exception as e:
         st.error(f"Could not load database: {e}")
 
-# --- Tab 2: The Vulnerable Attack ---
+# --- NEW TAB: The Simplest Attack (1 Field) ---
+with tab_simple_attack:
+    st.header("The Simplest Attack (The 'Mad Libs' Demo)")
+    st.warning("This search box is **INTENTIONALLY VULNERABLE**.")
+    
+    st.markdown("""
+    Think of this as a "fill-in-the-blank" game. The app has a template:
+    
+    `SELECT * FROM users WHERE username = '` **...USER INPUT GOES HERE...** `'`
+    
+    A normal user just fills the blank. An attacker breaks the sentence.
+    """)
+
+    username_search = st.text_input("Search for a username:")
+    
+    if username_search:
+        st.write("---")
+        st.subheader("Attack Result")
+        
+        # This is the VULNERABLE part: directly formatting a string
+        query = f"SELECT * FROM users WHERE username = '{username_search}'"
+        
+        st.markdown("**Final Query Sent to Database:**")
+        st.code(query, language="sql")
+        
+        try:
+            conn = get_db_conn()
+            if conn:
+                df = pd.read_sql_query(query, conn)
+                conn.close()
+                
+                if not df.empty:
+                    st.success(f"Found {len(df)} user(s):")
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.error("No user found with that exact name.")
+            
+        except sqlite3.Error as e:
+            st.error(f"An error occurred: {e}")
+
+    st.write("---")
+    st.subheader("Try the Attack")
+    st.markdown("""
+    **1. Normal Search:** Type `user3` in the box and see what happens. The query becomes `...WHERE username = 'user3'` and finds 1 user.
+    
+    **2. The Attack:** Now, copy and paste this into the box:
+    
+    `' OR 1=1 --`
+    
+    **What this does:**
+    * `'` : This first quote **closes the blank** (the username text).
+    * `OR 1=1` : This **adds a new command** that is *always true*.
+    * `--` : This **comments out** the rest of the app's original command, preventing errors.
+    
+    The final query becomes: `SELECT * FROM users WHERE username = '' OR 1=1 --'`
+    
+    The database runs this and thinks you're asking: "Show me users where the username is empty... **OR where 1 equals 1**." Since 1 always equals 1, it returns **all 20 users**. You've dumped the entire table!
+    """)
+
+# --- Tab 2: The Vulnerable Login Attack ---
 with tab2:
-    st.header("Vulnerable Login (The Attack)")
-    st.warning("This login form is **INTENTIONALLY VULNERABLE** to SQL Injection.")
+    st.header("Vulnerable Login (The 2-Field Attack)")
+    st.warning("This login form is also **INTENTIONALLY VULNERABLE**.")
     
     with st.form("vulnerable_form"):
         username = st.text_input("Username")
@@ -164,18 +222,16 @@ with tab2:
                 st.info("This error itself can leak information about the database structure!")
 
     st.write("---")
-    st.subheader("Try the Attack")
+    st.subheader("Try the Login Attack")
     st.markdown("""
-    To see the vulnerability, try entering the following in the **Username** field and *anything* in the Password field:
+    This is the same concept, but it bypasses the password check. Enter this in the **Username** field and *anything* in the Password field:
     
     `' OR '1'='1' --`
     
-    **What this does:**
-    * `'` closes the opening quote for the username.
-    * `OR '1'='1'` changes the logic: "find a user where username is... OR where 1 equals 1". Since 1 always equals 1, this is *always true*.
-    * `--` is a SQL comment. It tells the database to ignore the rest of the query (including the part that checks the password).
+    The query becomes:
+    `SELECT * FROM users WHERE username = '' OR '1'='1' --' AND password = '...password...'`
     
-    The database will execute the query, find the *first user in the table* (since `'1'='1'` is true for every row), and log you in as them.
+    The `--` comments out the *entire password check*, so the database just runs `...WHERE username = '' OR '1'='1'`. This is true for `user1`, so it logs you in as an admin.
     """)
 
 # --- Tab 3: The Secure Fix (Prevention) ---
@@ -183,6 +239,15 @@ with tab3:
     st.header("Secure Login (The Fix)")
     st.success("This login form is **SECURE** and uses Parameterized Queries.")
     
+    st.markdown("""
+    This is the **correct** way. We again use a "fill-in-the-blanks" template, but this time, we send the template and the user's answers to the database **separately**.
+    
+    **Template:** `SELECT * FROM users WHERE username = ? AND password = ?`
+    **Data:** `('user_input', 'pass_input')`
+    
+    The database *knows* the data is just data, not a command. It *never* lets the user's input change the sentence structure.
+    """)
+
     with st.form("secure_form"):
         username_s = st.text_input("Username")
         password_s = st.text_input("Password", type="password")
@@ -226,13 +291,11 @@ with tab3:
     
     `' OR '1'='1' --`
     
-    **What happens now:**
-    The login will **fail**. 
+    **It will fail.**
     
-    **Why?**
-    With parameterized queries, the database doesn't mix commands and data. It receives the command (`SELECT ... WHERE username = ?`) and the data (`' OR '1'='1' --`) separately.
+    The database *knows* this is not a command. It *literally* searches for a user whose name is the 14-character string `' OR '1'='1' --`.
     
-    It then *safely* searches for a user whose literal username is `' OR '1'='1' --`. Since no such user exists, the login fails. The attack string is never executed as a command.
+    Since no user has that name, the login correctly fails. This is called **input sanitization** and **parameterized queries**, and it's the #1 defense.
     """)
 
 # --- Tab 4: Attack Detection Scanner ---
@@ -272,3 +335,4 @@ with tab5:
     
     This simple practice is the single most effective way to prevent SQL injection attacks.
     """)
+
